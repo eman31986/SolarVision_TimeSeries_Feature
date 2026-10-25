@@ -4,7 +4,7 @@ Intelligent monitoring support for solar PV plants: **24–48h power forecasting
 
 > Part of the SolarVision project (Feature 1). Thermal fault detection (Feature 2) is a separate module.
 
-*Streamlit link : https://solarvisiontimeseriesfeature-gajz3vb3wa8kylffnrrceq.streamlit.app/*
+Streamlit link : https://solarvisiontimeseriesfeature-gajz3vb3wa8kylffnrrceq.streamlit.app/
 ---
 
 ## Overview
