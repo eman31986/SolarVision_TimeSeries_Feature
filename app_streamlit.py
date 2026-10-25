@@ -112,10 +112,11 @@ chart_df = pd.DataFrame(
     {
         "Forecast (expected)": df["forecast"],
         "Actual": df["actual_used"],
+        "Alert": df["actual_used"].where(df["anomaly_alert"] == 1),
     },
     index=df.index,
 )
-st.line_chart(chart_df, height=280)
+st.line_chart(chart_df, height=280, color=["#1f77b4", "#ff7f0e", "#d62728"])
 
 al = df[df["anomaly_alert"] == 1]
 if len(al):
@@ -129,7 +130,6 @@ if simulate:
         f"**{(pd.Timestamp(fault_start) + pd.Timedelta(days=fault_days)).date()}** "
         f"({int(fault_drop * 100)}% power loss on daytime hours)"
     )
-
 # --------------------------------------------------------------------------
 # Cleaning decision
 # --------------------------------------------------------------------------
