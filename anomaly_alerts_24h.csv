@@ -1,0 +1,1 @@
+datetime,actual_power_W,predicted_power_W,residual_W,residual_pct,anomaly_count_6h,alert_reason
