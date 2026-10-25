@@ -1,201 +1,184 @@
 # SolarVision — Time Series Module
 
-Intelligent monitoring support for solar PV plants: **24–48h power forecasting**, **anomaly alerts**, and a **transparent cleaning cost–benefit decision**.
+Forecasting, anomaly alerts, and a transparent cleaning cost–benefit decision for solar PV monitoring.
 
-> Part of the SolarVision project (Feature 1). Thermal fault detection (Feature 2) is a separate module.
+**Live dashboard:** https://solarvisiontimeseriesfeature-gajz3vb3wa8kylffnrrceq.streamlit.app/
 
-Streamlit link : https://solarvisiontimeseriesfeature-gajz3vb3wa8kylffnrrceq.streamlit.app/
+> Part of the SolarVision project. Thermal (IR) fault detection is a separate module and is **not** linked to this one.
+
 ---
 
-## Overview
-
-SolarVision turns historical PV production and environmental data into operational signals:
+## What it does
 
 | Capability | Description |
-|------------|-------------|
-| **Forecasting** | 24h-ahead (and optional 48h) PV power prediction |
-| **Anomaly detection** | Sustained under-production vs forecast (daytime rules) |
-| **Cleaning decision** | Scenario-based cost–benefit using user price/cost inputs |
-| **API + Dashboard** | FastAPI endpoints + Streamlit UI |
+|---|---|
+| **Forecasting** | Predicts PV power 24 h ahead (a lighter 48 h experiment is included) |
+| **Anomaly alerts** | Flags *sustained* daytime under-production versus the forecast |
+| **Cleaning decision** | Scenario-based **Clean / Wait** from user-supplied price, cost and recovery inputs |
+| **API + Dashboard** | FastAPI service and a Streamlit dashboard |
 
-**Data source:** [Hourly PV Power and Dust Accumulation Dataset — Laghouat, Algeria (2022)](https://data.mendeley.com/datasets/4jdt83yy43) only. No external APIs or invented sensors.
+An alert means *"production is below the model's expectation"*. It is **not** proof of dust; shading, clouds or sensor faults can cause the same signal.
+
+**Data source:** [Hourly PV Power and Dust Accumulation Dataset — Laghouat, Algeria (2022)](https://data.mendeley.com/datasets/4jdt83yy43). No external APIs and no invented sensors.
 
 ---
 
 ## Project structure
 
-```text
-├── 01_preprocessing.ipynb      # Features, targets, temporal split
-├── 02_training.ipynb           # 24h models, MLflow, Optuna, SHAP
-├── 02b_training_48h.ipynb      # Light 48h-ahead training
-├── 03_anomaly_cleaning.ipynb   # Alerts + cleaning economics
-├── api.py                      # FastAPI service
-├── app_streamlit.py            # Streamlit dashboard
-├── Laghouat_2022_final.csv     # Dataset (download separately if needed)
-├── processed_data/             # Generated parquet + meta
-├── models/                     # Saved joblib models
-└── figures/                    # SHAP, anomaly plots
 ```
-
----
-
-## Requirements
-
-```bash
-pip install pandas numpy scikit-learn lightgbm optuna mlflow shap torch
-pip install pyarrow matplotlib joblib fastapi uvicorn streamlit pydantic
+├── 01_preprocessing.ipynb        # Cleaning, features, targets, chronological split
+├── 02_training.ipynb             # 24h models, MLflow, Optuna, SHAP, blend
+├── 02b_training_48h.ipynb        # Light 48h-ahead experiment
+├── 03_anomaly_cleaning.ipynb     # Alert rules + cleaning economics
+├── api.py                        # FastAPI service
+├── app_streamlit.py              # Streamlit dashboard
+├── Laghouat_2022_final.csv       # Dataset
+├── forecast_test_predictions_24h.csv   # Test predictions (dashboard input)
+├── anomaly_results_24h.csv / anomaly_alerts_24h.csv
+├── cleaning_decision_examples.csv
+├── model_comparison_val_24h.csv / model_comparison_test_24h.csv / model_comparison_val_48h.csv
+├── mlflow_solarvision.db         # MLflow tracking store
+├── processed_data/               # Generated parquet + metadata
+├── models/                       # Saved joblib models
+└── figures/                      # SHAP and anomaly plots
 ```
-
-Python 3.10+ recommended.
 
 ---
 
 ## Quick start
 
-### 1. Data
-
-Place `Laghouat_2022_final.csv` in the project root  
-(download from the Mendeley dataset linked above).
-
-### 2. Notebooks (in order)
-
-```text
-01_preprocessing.ipynb
-        ↓
-02_training.ipynb
-        ↓
-02b_training_48h.ipynb    # optional
-        ↓
-03_anomaly_cleaning.ipynb
-```
-
-### 3. API
-
 ```bash
-uvicorn api:app --reload --port 8000
+pip install pandas numpy scikit-learn lightgbm optuna mlflow shap torch \
+            pyarrow matplotlib joblib fastapi uvicorn streamlit pydantic
 ```
+Python 3.10+ recommended.
 
-- Health: http://localhost:8000/health  
-- Interactive docs: http://localhost:8000/docs  
+### 1. Run the notebooks in order
+```
+01_preprocessing.ipynb → 02_training.ipynb → (02b_training_48h.ipynb) → 03_anomaly_cleaning.ipynb
+```
+Place `Laghouat_2022_final.csv` in the project root first.
 
-| Endpoint | Method | Role |
-|----------|--------|------|
-| `/health` | GET | Model load status |
-| `/forecast` | POST | Power prediction from feature map |
-| `/anomaly` | POST | Residual-based sustained alerts |
-| `/cleaning` | POST | Cost–benefit Clean / Wait |
-
-### 4. Dashboard
-
+### 2. Dashboard
 ```bash
 streamlit run app_streamlit.py
 ```
+Needs only `streamlit`, `pandas`, `numpy` and `forecast_test_predictions_24h.csv` in the same folder.
 
-Shows test forecast vs actual, anomaly summary, and cleaning decision controls.
+### 3. API
+```bash
+uvicorn api:app --reload --port 8000
+```
+Needs the `models/` folder produced by notebook 02. Docs: `http://localhost:8000/docs`.
+
+| Endpoint | Method | Role |
+|---|---|---|
+| `/health` | GET | Model load status |
+| `/forecast` | POST | Power prediction from a feature map (optional blend) |
+| `/anomaly` | POST | Sustained-alert detection on actual vs predicted points |
+| `/cleaning` | POST | Clean / Wait cost–benefit |
+| `/demo/test_summary` | GET | Summary of the saved test predictions |
+
+> Missing features in `/forecast` are filled with `0.0`, so send the full feature set.
+
+### 4. MLflow UI (optional)
+```bash
+mlflow ui --backend-store-uri sqlite:///mlflow_solarvision.db
+```
 
 ---
 
 ## Modeling approach
 
-### Features (from dataset only)
+**Data:** 4,368 hourly rows (2022-02-17 → 2022-08-17); 4,272 remain after lag/target construction.
 
-- Calendar & cyclic encodings (hour, day-of-year)
-- Power lags & rolling statistics (1h–72h)
-- Dust density (PCHIP-reconstructed) + lags/rolling
-- Weather fields present in the CSV (temperature, RH, wind, clouds, precipitation, irradiance when available)
-- Daytime flag (`G_POA > 5` when irradiance exists)
+**Split (chronological, no shuffle, 70/15/15):**
 
-### Targets
+| Set | Rows | Period |
+|---|---|---|
+| Train | 2,990 | 2022-02-20 → 2022-06-24 |
+| Validation | 640 | 2022-06-24 → 2022-07-21 |
+| Test | 642 | 2022-07-21 → 2022-08-16 |
 
-- **24h-ahead:** `P_dusty` shifted −24 hours (main operational target)
-- **48h-ahead:** same pipeline, longer horizon (`02b`)
-- Nowcast-style comparison to published MATLAB work is **reference only** (different task)
+**Target:** `P_dusty_W` shifted −24 h (main) and −48 h (experiment).
 
-### Model families compared
+**Features (47 for 24 h):** calendar + cyclic encodings, power lags (1–72 h) and trailing rolling stats, PCHIP-reconstructed dust density + lags/rolling, irradiance/temperature history, weather fields, daytime flag. All lags and rolling windows use past values only; concurrent `P_dusty_W` and `P_clean_*` are excluded.
 
-| Family | Models |
-|--------|--------|
-| Linear baseline | Ridge |
-| Tree ensembles | Random Forest, LightGBM (+ Optuna) |
-| Deep learning | LSTM (lags + static features) |
-| Baseline | Persistence (lag 24h / 48h) |
+**Models compared:** Persistence (baseline), Ridge, Random Forest, LightGBM (default and Optuna-tuned, 25 trials, `TimeSeriesSplit`), and a hybrid LSTM. Experiments are tracked with MLflow; SHAP is used for explanations. Selection is by **validation MAE** among learned models. The deployed model is **Random Forest**.
 
-- Experiments tracked with **MLflow**
-- Hyperparameters: **Optuna** + time-series CV on LightGBM
-- Metrics: **MAE, RMSE, MAPE (daytime), R²**
-- Explainability: **SHAP**
-- Chronological **70 / 15 / 15** split (no shuffle)
+**Metrics:** MAE, RMSE, daytime MAPE, R².
 
-Persistence is always reported: PV series are strongly daily-periodic.
+---
+
+## Results (module-scale watts)
+
+**Validation, 24 h**
+
+| Model | MAE | RMSE | MAPE_day | R² |
+|---|---|---|---|---|
+| Persistence | 0.919 | 3.538 | 11.6% | 0.967 |
+| **Random Forest** | 1.207 | 3.060 | 14.5% | 0.975 |
+| LightGBM (default) | 1.228 | 3.137 | 14.9% | 0.974 |
+| LSTM | 1.571 | 3.017 | 22.2% | 0.976 |
+| LightGBM-Optuna | 1.599 | 3.200 | 20.4% | 0.973 |
+| Ridge | 2.820 | 3.788 | 45.1% | 0.962 |
+
+**Test, 24 h (opened once)**
+
+| Model | MAE | RMSE | MAPE_day | R² |
+|---|---|---|---|---|
+| Persistence | **1.038** | 3.269 | 11.4% | 0.978 |
+| Random Forest (deployed) | 1.744 | 3.748 | 15.3% | 0.971 |
+| Blend (w = 0.20) | 1.068 | **3.135** | **11.2%** | **0.979** |
+
+**Honest reading:** on this test window the Random Forest does **not** beat the persistence baseline (daily seasonality is very strong). A blend of 20% model + 80% persistence, with the weight chosen on validation, beats persistence on RMSE, MAPE and R² while being marginally worse on MAE. Both are reported.
+
+**48 h experiment:** LightGBM was selected on validation (MAE 1.350) but on test it reaches MAE 1.907 versus 1.104 for persistence. It is not wired into the API or dashboard.
+
+**Reference (Seghir et al., MATLAB, same site):** RF RMSE ≈ 4.46 W, R² ≈ 0.96 on a *nowcast* task. This is a methodological reference only, not a comparable 24 h-ahead benchmark.
 
 ---
 
 ## Anomaly & cleaning logic
 
-**Anomaly (default):** daytime hour where actual power is ≥20% below forecast, and this holds for ≥3 of the last 6 hours.
+**Anomaly:** a daytime hour is anomalous when forecast ≥ 5 W and actual ≤ forecast × (1 − 20%). A **sustained alert** is raised when ≥ 3 of the last 6 hours are anomalous.
 
-Interpretation: *unexpected drop vs model expectation* — **not** a verified root cause (dust, cloud, shadow, etc.).
+On the real test window there are 10 anomalous hours and **0 sustained alerts**.
 
 **Cleaning decision:**
-
-```text
+```
 net_benefit = (energy_loss_kwh × recoverable_fraction × electricity_price) − cleaning_cost
 decision    = Clean if net_benefit > 0 else Wait
 ```
+Price, cost, recovery fraction and `plant_scale` are user inputs. The notebook computes loss from the whole test window (expected 9.04 vs actual 9.85 module-kWh → loss 0 → **Wait**). The dashboard computes the hourly shortfall on days that have a sustained alert and only recommends **Clean** when an alert exists and the net benefit is positive.
 
-Energy totals can be taken from the test window; price, cost, recovery fraction, and plant scale are **user inputs**.
+### Dashboard demo
+The test data contains no sustained soiling, so the dashboard offers a **simulated soiling event** (default: 35% power loss for 3 days from 2022-08-05, daytime hours only):
 
----
+| Mode | Sustained alert hours | Decision |
+|---|---|---|
+| Simulation off (real data) | 0 | Wait |
+| Simulation on (defaults) | 26 | Clean (net benefit ≈ 405.8) |
 
-## Reference benchmark (MATLAB / Seghir et al.)
-
-Published pipeline on the same site (nowcast-style evaluation, daytime N≈341):
-
-| Model | RMSE (W) | MAE (W) | R² |
-|-------|----------|---------|-----|
-| Random Forest (best single) | ~4.46 | ~2.71 | ~0.96 |
-| Hybrid ensemble | ~4.93 | ~3.23 | ~0.95 |
-
-Our primary task is **multi-hour-ahead forecasting**, so these numbers are a methodological reference, not a required match.
+The simulation is for demonstration only and is labelled as such in the app.
 
 ---
 
-## Limitations 
+## Limitations
 
-1. Data from **Laghouat, Algeria** (Feb–Aug 2022), not an Egyptian plant.
-2. Dust series is partly **reconstructed** between sparse gravimetric samples.
-3. Single **module-scale** measurements; plant-level kWh uses a user `plant_scale`.
-4. Forecast residuals do **not** prove soiling as the cause of every drop.
-5. Cleaning recommendations are **scenario-based**, not guaranteed savings.
-6. No linkage in this module to thermal IR fault images (Feature 1).
-
----
-
-## Example results
-
-Results from the Laghouat chronological hold-out (module-scale watts).
-
-**Validation (24h)**
-
-| Model | MAE | RMSE | MAPE_day | R² |
-|-------|-----|------|----------|-----|
-| Ridge | 2.18 | 3.41 | 43.7 | 0.969 |
-| Random Forest | 1.34 | 3.56 | 16.9 | 0.967 |
-| LightGBM-Optuna | 1.25 | 3.26 | 15.4 | 0.972 |
-
-**Test (24h)**
-
-| Model | MAE | RMSE | MAPE_day | R² |
-|-------|-----|------|----------|-----|
-| Persistence | 1.04 | 3.27 | 12.0 | 0.978 |
-| LightGBM-Optuna | 1.88 | 4.11 | 16.8 | 0.965 |
-
-On this test window, persistence is strong due to daily seasonality; the learned model remains the deployment candidate after validation selection, with optional blending reported in training notebooks.
+1. Data come from **Laghouat, Algeria** (Feb–Aug 2022), one season, one site, not an Egyptian plant.
+2. Single **module-scale** series; plant-level kWh uses a hypothetical `plant_scale`.
+3. Dust density is **reconstructed** (PCHIP) from only 48 gravimetric measurements.
+4. Features use current weather, not weather forecasts.
+5. The learned model does not beat persistence on MAE for the test window; see Results.
+6. The LSTM receives seven irregularly spaced lags, so it is not a true hourly-sequence model.
+7. Forecast residuals do **not** prove soiling; alerts depend on threshold choices.
+8. Cleaning recommendations are scenarios, not guaranteed savings.
+9. No link to thermal/IR fault images.
 
 ---
 
 ## Acknowledgments
 
-- Laghouat PV + dust dataset authors and Mendeley release  
-- SolarVision project scope: forecasting, anomaly support, and maintenance prioritization for PV operators
-```
+- Authors of the Laghouat PV + dust dataset and the Mendeley release.
+- SolarVision project scope: forecasting, anomaly support and maintenance prioritisation for PV operators.
