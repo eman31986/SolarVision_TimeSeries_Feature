@@ -105,25 +105,30 @@ c3.metric("Sustained alert hours", int(df["anomaly_alert"].sum()))
 c4.metric("Simulated event", "ON" if simulate else "OFF")
 
 # --------------------------------------------------------------------------
-# Chart
+# Chart (Streamlit native — no matplotlib)
 # --------------------------------------------------------------------------
 st.subheader("Actual vs forecast")
-fig, ax = plt.subplots(figsize=(14, 4))
-ax.plot(df.index, df["forecast"], label="Forecast (expected)", lw=1.2)
-ax.plot(df.index, df["actual_used"], label="Actual", lw=1.0, alpha=0.85)
+chart_df = pd.DataFrame(
+    {
+        "Forecast (expected)": df["forecast"],
+        "Actual": df["actual_used"],
+    },
+    index=df.index,
+)
+st.line_chart(chart_df, height=280)
+
 al = df[df["anomaly_alert"] == 1]
-ax.scatter(al.index, al["actual_used"], color="red", s=26, zorder=5, label="Sustained alert")
-if simulate:
-    ax.axvspan(
-        pd.Timestamp(fault_start),
-        pd.Timestamp(fault_start) + pd.Timedelta(days=fault_days),
-        color="orange", alpha=0.15, label="Simulated soiling event",
+if len(al):
+    st.caption(
+        f"Sustained alerts: **{len(al)}** hours "
+        f"(first: {al.index.min()}, last: {al.index.max()})"
     )
-ax.set_ylabel("Power (W)")
-ax.grid(True, alpha=0.3)
-ax.legend(loc="upper left")
-fig.tight_layout()
-st.pyplot(fig)
+if simulate:
+    st.caption(
+        f"Simulated soiling window: **{fault_start}** → "
+        f"**{(pd.Timestamp(fault_start) + pd.Timedelta(days=fault_days)).date()}** "
+        f"({int(fault_drop * 100)}% power loss on daytime hours)"
+    )
 
 # --------------------------------------------------------------------------
 # Cleaning decision
@@ -138,6 +143,7 @@ if len(al):
     module_expected_kwh = float(df.loc[in_alert_days, "forecast"].sum() / 1000.0)
     module_actual_kwh = float(df.loc[in_alert_days, "actual_used"].sum() / 1000.0)
 else:
+    alert_days = set()
     module_loss_kwh = module_expected_kwh = module_actual_kwh = 0.0
 
 loss = module_loss_kwh * scale
@@ -168,7 +174,7 @@ else:
 with st.expander("Calculation details"):
     st.write(
         {
-            "alert_days": sorted(str(d.date()) for d in (alert_days if len(al) else [])),
+            "alert_days": sorted(str(d.date()) for d in alert_days),
             "module_expected_kwh_on_alert_days": round(module_expected_kwh, 4),
             "module_actual_kwh_on_alert_days": round(module_actual_kwh, 4),
             "module_shortfall_kwh": round(module_loss_kwh, 4),
